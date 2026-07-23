@@ -27,9 +27,9 @@ pub(crate) mod gdb_index;
 pub(crate) mod glob_match;
 pub(crate) mod grouping;
 pub(crate) mod hash;
+pub mod incremental;
 pub(crate) mod input_data;
 pub(crate) mod input_section_id;
-pub mod incremental;
 pub(crate) mod layout;
 pub(crate) mod layout_rules;
 #[cfg_attr(
@@ -111,13 +111,13 @@ use crossbeam_utils::atomic::AtomicCell;
 use error::AlreadyInitialised;
 pub use fs::make_executable;
 use hashbrown::HashSet;
-use rayon::iter::IntoParallelRefIterator as _;
-use rayon::iter::ParallelIterator as _;
 use input_data::FileLoader;
 use input_data::InputFile;
 use input_data::InputLinkerScript;
 use layout_rules::LayoutRules;
 use output_section_id::OutputSections;
+use rayon::iter::IntoParallelRefIterator as _;
+use rayon::iter::ParallelIterator as _;
 use std::io::BufWriter;
 use std::io::IsTerminal;
 use std::io::Write;
@@ -340,22 +340,27 @@ impl Linker {
         let loaded = loaded?;
 
         if let Some(ref state) = cached_state {
-            let file_tuples: Vec<(&std::path::Path, u64, Option<std::time::SystemTime>, u64)> = file_loader
-                .loaded_files
-                .par_iter()
-                .filter(|f| !f.modifiers.temporary)
-                .map(|f| {
-                    let d = f.data();
-                    let mtime = f.modification_time();
-                    let len = d.len() as u64;
-                    let hash = if state.is_mtime_unchanged(&f.filename, len, mtime) {
-                        state.cached_inputs.get(&f.filename).map(|c| c.hash).unwrap_or(0)
-                    } else {
-                        incremental::compute_input_hash(d)
-                    };
-                    (f.filename.as_path(), len, mtime, hash)
-                })
-                .collect();
+            let file_tuples: Vec<(&std::path::Path, u64, Option<std::time::SystemTime>, u64)> =
+                file_loader
+                    .loaded_files
+                    .par_iter()
+                    .filter(|f| !f.modifiers.temporary)
+                    .map(|f| {
+                        let d = f.data();
+                        let mtime = f.modification_time();
+                        let len = d.len() as u64;
+                        let hash = if state.is_mtime_unchanged(&f.filename, len, mtime) {
+                            state
+                                .cached_inputs
+                                .get(&f.filename)
+                                .map(|c| c.hash)
+                                .unwrap_or(0)
+                        } else {
+                            incremental::compute_input_hash(d)
+                        };
+                        (f.filename.as_path(), len, mtime, hash)
+                    })
+                    .collect();
             let summary = state.evaluate_summary(file_tuples);
             tracing::info!(
                 "Incremental build: {}/{} inputs unchanged (modified: {}, reused symbols: {})",

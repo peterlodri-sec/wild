@@ -74,7 +74,8 @@ impl IncrementalState {
             )
         })?;
         let state_path = Self::state_file_path(cache_dir);
-        let bytes = postcard::to_allocvec(self).with_context(|| "Failed to serialize incremental state".to_string())?;
+        let bytes = postcard::to_allocvec(self)
+            .with_context(|| "Failed to serialize incremental state".to_string())?;
         fs::write(&state_path, bytes).with_context(|| {
             format!(
                 "Failed to write incremental state file `{}`",

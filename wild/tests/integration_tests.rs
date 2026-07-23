@@ -2519,20 +2519,56 @@ impl ProgramInputs {
         );
         let state_file = libwild::incremental::IncrementalState::state_file_path(&cache_dir);
         if !state_file.exists() {
-            bail!("Incremental state file `{}` was not created", state_file.display());
+            bail!(
+                "Incremental state file `{}` was not created",
+                state_file.display()
+            );
         }
 
         let t2 = std::time::Instant::now();
         let _subsequent_output =
             Linker::Wild.link(self.name(), inputs, &config_incremental, cross_arch)?;
-        let duration_inc_subsequent = t2.elapsed();
+        let duration_inc_fastpath = t2.elapsed();
+
+        let t3 = std::time::Instant::now();
+        let _relink_output =
+            Linker::Wild.link(self.name(), inputs, &config_incremental, cross_arch)?;
+        let duration_inc_modified = t3.elapsed();
+
+        let overhead_initial_pct = if duration_non_incremental.as_nanos() > 0 {
+            ((duration_inc_initial.as_nanos() as f64 - duration_non_incremental.as_nanos() as f64)
+                / duration_non_incremental.as_nanos() as f64)
+                * 100.0
+        } else {
+            0.0
+        };
+
+        let overhead_unchanged_pct = if duration_non_incremental.as_nanos() > 0 {
+            ((duration_inc_fastpath.as_nanos() as f64 - duration_non_incremental.as_nanos() as f64)
+                / duration_non_incremental.as_nanos() as f64)
+                * 100.0
+        } else {
+            0.0
+        };
+
+        let overhead_modified_pct = if duration_non_incremental.as_nanos() > 0 {
+            ((duration_inc_modified.as_nanos() as f64 - duration_non_incremental.as_nanos() as f64)
+                / duration_non_incremental.as_nanos() as f64)
+                * 100.0
+        } else {
+            0.0
+        };
 
         println!(
-            "[Incremental Test Matrix - {}]\n  Non-incremental: {:?}\n  Incremental Initial: {:?}\n  Incremental Subsequent: {:?}",
+            "[Incremental State Tracking Overhead Matrix - {}]\n  ├─ 1. Baseline (Non-Incremental):         {:?}\n  ├─ 2. Incremental Initial (State save):    {:?} ({:+.2}% vs baseline)\n  ├─ 3. Incremental Unchanged (State check): {:?} ({:+.2}% vs baseline)\n  └─ 4. Incremental Relink (State update):   {:?} ({:+.2}% vs baseline)",
             self.name(),
             duration_non_incremental,
             duration_inc_initial,
-            duration_inc_subsequent,
+            overhead_initial_pct,
+            duration_inc_fastpath,
+            overhead_unchanged_pct,
+            duration_inc_modified,
+            overhead_modified_pct,
         );
 
         Ok(())
