@@ -1,6 +1,6 @@
 use crate::error::{Context, Result};
+use foldhash::HashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;

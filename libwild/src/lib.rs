@@ -274,6 +274,7 @@ impl Linker {
                     last_build_time: Some(std::time::SystemTime::now()),
                     ..Default::default()
                 };
+                let existing_state = incremental::IncrementalState::load(&cache_dir);
                 let file_records: Vec<_> = file_loader
                     .loaded_files
                     .par_iter()
@@ -281,8 +282,21 @@ impl Linker {
                     .map(|input| {
                         let data = input.data();
                         let mtime = input.modification_time();
-                        let hash = incremental::compute_input_hash(data);
-                        (input.filename.clone(), data.len() as u64, mtime, hash)
+                        let len = data.len() as u64;
+                        let hash = if let Some(ref existing) = existing_state {
+                            if existing.is_mtime_unchanged(&input.filename, len, mtime) {
+                                existing
+                                    .cached_inputs
+                                    .get(&input.filename)
+                                    .map(|c| c.hash)
+                                    .unwrap_or_else(|| incremental::compute_input_hash(data))
+                            } else {
+                                incremental::compute_input_hash(data)
+                            }
+                        } else {
+                            incremental::compute_input_hash(data)
+                        };
+                        (input.filename.clone(), len, mtime, hash)
                     })
                     .collect();
 
