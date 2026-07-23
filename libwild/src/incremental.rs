@@ -166,6 +166,82 @@ impl IncrementalState {
         }
         summary
     }
+
+    /// Evaluates incremental build summary directly from loaded input files.
+    pub(crate) fn evaluate_file_loader(
+        &self,
+        file_loader: &crate::input_data::FileLoader,
+    ) -> IncrementalSummary {
+        use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
+
+        let file_tuples: Vec<(&Path, u64, Option<SystemTime>, u64)> = file_loader
+            .loaded_files
+            .par_iter()
+            .filter(|f| !f.modifiers.temporary)
+            .map(|f| {
+                let d = f.data();
+                let mtime = f.modification_time();
+                let len = d.len() as u64;
+                let hash = if self.is_mtime_unchanged(&f.filename, len, mtime) {
+                    self.cached_inputs
+                        .get(&f.filename)
+                        .map(|c| c.hash)
+                        .unwrap_or(0)
+                } else {
+                    compute_input_hash(d)
+                };
+                (f.filename.as_path(), len, mtime, hash)
+            })
+            .collect();
+
+        self.evaluate_summary(file_tuples)
+    }
+
+    /// Saves state to disk given argument context and file loader.
+    pub(crate) fn save_from_loader<A: crate::platform::Args>(
+        args: &A,
+        file_loader: &crate::input_data::FileLoader,
+    ) -> Result<()> {
+        use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
+
+        let cache_dir =
+            Self::get_cache_dir(args.output(), args.common().incremental_dir.as_deref());
+        let mut state = Self {
+            output_path: args.output().to_path_buf(),
+            last_build_time: Some(SystemTime::now()),
+            ..Default::default()
+        };
+        let existing_state = Self::load(&cache_dir);
+        let file_records: Vec<_> = file_loader
+            .loaded_files
+            .par_iter()
+            .filter(|input| !input.modifiers.temporary)
+            .map(|input| {
+                let data = input.data();
+                let mtime = input.modification_time();
+                let len = data.len() as u64;
+                let hash = if let Some(ref existing) = existing_state {
+                    if existing.is_mtime_unchanged(&input.filename, len, mtime) {
+                        existing
+                            .cached_inputs
+                            .get(&input.filename)
+                            .map(|c| c.hash)
+                            .unwrap_or_else(|| compute_input_hash(data))
+                    } else {
+                        compute_input_hash(data)
+                    }
+                } else {
+                    compute_input_hash(data)
+                };
+                (input.filename.clone(), len, mtime, hash)
+            })
+            .collect();
+
+        for (path, len, mtime, hash) in file_records {
+            state.record_input(path, len, mtime, hash);
+        }
+        state.save(&cache_dir)
+    }
 }
 
 /// Compute a fast 64-bit blake3 hash of byte slice.
