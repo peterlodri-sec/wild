@@ -8,7 +8,6 @@ use std::time::SystemTime;
 /// Metadata recorded for an input file during linking.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct CachedInputFile {
-    pub path: PathBuf,
     pub modification_time: Option<SystemTime>,
     pub size_bytes: u64,
     pub hash: u64,
@@ -94,9 +93,8 @@ impl IncrementalState {
         hash: u64,
     ) {
         self.cached_inputs.insert(
-            path.clone(),
+            path,
             CachedInputFile {
-                path,
                 modification_time: mtime,
                 size_bytes,
                 hash,
