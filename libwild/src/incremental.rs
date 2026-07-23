@@ -110,15 +110,13 @@ impl IncrementalState {
         mtime: Option<SystemTime>,
         hash: u64,
     ) -> bool {
-        if let Some(cached) = self.cached_inputs.get(path) {
+        self.cached_inputs.get(path).is_some_and(|cached| {
             cached.size_bytes == size_bytes
                 && cached.hash == hash
                 && (mtime.is_none()
                     || cached.modification_time.is_none()
                     || cached.modification_time == mtime)
-        } else {
-            false
-        }
+        })
     }
 
     /// Fast-path check: returns `true` if file size and modification time match cached entries.
@@ -128,13 +126,11 @@ impl IncrementalState {
         size_bytes: u64,
         mtime: Option<SystemTime>,
     ) -> bool {
-        if let (Some(cached), Some(mtime)) = (self.cached_inputs.get(path), mtime) {
-            cached.size_bytes == size_bytes
-                && cached.modification_time.is_some()
-                && cached.modification_time == Some(mtime)
-        } else {
-            false
-        }
+        mtime.is_some_and(|mtime| {
+            self.cached_inputs.get(path).is_some_and(|cached| {
+                cached.size_bytes == size_bytes && cached.modification_time == Some(mtime)
+            })
+        })
     }
 
     /// Record symbols associated with an input file.
