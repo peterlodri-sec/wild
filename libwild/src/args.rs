@@ -1410,9 +1410,6 @@ fn declare_common_args<T: platform::Args>(parser: &mut ArgumentParser<T>) {
         .help("Enable incremental linking")
         .execute(|args, _modifier_stack| {
             args.common_mut().incremental = true;
-            if args.common().file_replacement_mode.is_none() {
-                args.common_mut().file_replacement_mode = Some(FileReplacementMode::UpdateInPlace);
-            }
             Ok(())
         });
 
@@ -1423,9 +1420,6 @@ fn declare_common_args<T: platform::Args>(parser: &mut ArgumentParser<T>) {
         .execute(|args, _modifier_stack, value| {
             args.common_mut().incremental = true;
             args.common_mut().incremental_dir = Some(PathBuf::from(value));
-            if args.common().file_replacement_mode.is_none() {
-                args.common_mut().file_replacement_mode = Some(FileReplacementMode::UpdateInPlace);
-            }
             Ok(())
         });
 
