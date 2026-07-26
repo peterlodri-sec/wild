@@ -27,6 +27,7 @@ pub(crate) mod gdb_index;
 pub(crate) mod glob_match;
 pub(crate) mod grouping;
 pub(crate) mod hash;
+pub mod incremental;
 pub(crate) mod input_data;
 pub(crate) mod input_section_id;
 pub(crate) mod layout;
@@ -266,8 +267,17 @@ impl Linker {
 
         file_loader.verify_inputs_unchanged()?;
 
-        // Write the dependency file and inputs trace after successful linking.
+        // Write the dependency file, inputs trace, and incremental state after successful linking.
         if result.is_ok() {
+            if args.common().incremental {
+                if let Err(e) = incremental::IncrementalState::save_from_loader(args, &file_loader)
+                {
+                    (args.common().warning_callback)(crate::error::Warning::new(
+                        format!("Failed to save incremental state: {e:?}").into(),
+                    ));
+                }
+            }
+
             if let Some(dep_file_path) = &args.dependency_file() {
                 write_dependency_file(dep_file_path, args.output(), &file_loader.loaded_files)
                     .with_context(|| {
@@ -295,11 +305,32 @@ impl Linker {
     ) -> error::Result<LinkerOutput<'data>> {
         let mut plugin = P::maybe_init_linker_plugin(args, &self.linker_plugin_arena, &self.herd)?;
 
+        let cached_state = if args.common().incremental {
+            let cache_dir = incremental::IncrementalState::get_cache_dir(
+                args.output(),
+                args.common().incremental_dir.as_deref(),
+            );
+            incremental::IncrementalState::load(&cache_dir)
+        } else {
+            None
+        };
+
         let loaded = file_loader.load_inputs::<P>(&args.common().inputs, args, &mut plugin);
 
         args.common().save_dir.finish(file_loader, args)?;
 
         let loaded = loaded?;
+
+        if let Some(ref state) = cached_state {
+            let summary = state.evaluate_file_loader(file_loader);
+            tracing::info!(
+                "Incremental build: {}/{} inputs unchanged (modified: {}, reused symbols: {})",
+                summary.unchanged_inputs,
+                summary.total_inputs,
+                summary.modified_inputs,
+                summary.reused_symbols
+            );
+        }
 
         let output_kind = OutputKind::new(args, file_loader);
 

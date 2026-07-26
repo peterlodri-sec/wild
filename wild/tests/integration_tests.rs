@@ -1137,6 +1137,7 @@ struct Config {
     requires_rust_musl: bool,
     requires_linker_plugin: bool,
     test_update_in_place: bool,
+    test_incremental: bool,
     test_config: TestConfig,
     tracked_files: Vec<PathBuf>,
     so_single_linker: Option<Linker>,
@@ -1828,6 +1829,7 @@ impl Config {
             rustc_channel: RustcChannel::Default,
             requires_rust_musl: false,
             test_update_in_place: false,
+            test_incremental: false,
             test_config: test_config.clone(),
             tracked_files: Default::default(),
             available_linkers: available_linkers.to_owned(),
@@ -2330,6 +2332,9 @@ fn process_directive(
         "TestUpdateInPlace" => {
             config.test_update_in_place = arg.parse()?;
         }
+        "TestIncremental" => {
+            config.test_incremental = arg.to_lowercase().parse()?;
+        }
         "DriverMode" => {
             config.driver_mode = Some(DriverMode::from_str(arg).map_err(|_| {
                 error!(
@@ -2389,6 +2394,10 @@ impl ProgramInputs {
 
         if config.test_update_in_place && matches!(linker, Linker::Wild) {
             self.run_update_in_place_test(&inputs, config, cross_arch, &link_output)?;
+        }
+
+        if config.test_incremental && matches!(linker, Linker::Wild) {
+            self.run_incremental_test(&inputs, config, cross_arch, &link_output)?;
         }
 
         let shared_objects = inputs
@@ -2474,6 +2483,93 @@ impl ProgramInputs {
                 cmd = updated_link_output.command,
             );
         }
+
+        Ok(())
+    }
+
+    fn run_incremental_test(
+        &self,
+        inputs: &[LinkerInput],
+        config: &Config,
+        cross_arch: Option<Architecture>,
+        _reference_output: &LinkOutput,
+    ) -> Result {
+        let t0 = std::time::Instant::now();
+        let _std_output = Linker::Wild.link(self.name(), inputs, config, cross_arch)?;
+        let duration_non_incremental = t0.elapsed();
+
+        let mut config_incremental = config.clone();
+        let args: &[&str] = match config.linker_driver {
+            LinkerDriver::Compiler(_) => &["-Wl,--incremental"],
+            LinkerDriver::Direct(_) => &["--incremental"],
+        };
+        config_incremental
+            .wild_extra_linker_args
+            .args
+            .extend(args.iter().map(|a| a.to_string()));
+
+        let t1 = std::time::Instant::now();
+        let updated_link_output =
+            Linker::Wild.link(self.name(), inputs, &config_incremental, cross_arch)?;
+        let duration_inc_initial = t1.elapsed();
+
+        let cache_dir = libwild::incremental::IncrementalState::get_cache_dir(
+            &updated_link_output.binary,
+            None,
+        );
+        let state_file = libwild::incremental::IncrementalState::state_file_path(&cache_dir);
+        if !state_file.exists() {
+            bail!(
+                "Incremental state file `{}` was not created",
+                state_file.display()
+            );
+        }
+
+        let t2 = std::time::Instant::now();
+        let _subsequent_output =
+            Linker::Wild.link(self.name(), inputs, &config_incremental, cross_arch)?;
+        let duration_inc_fastpath = t2.elapsed();
+
+        let t3 = std::time::Instant::now();
+        let _relink_output =
+            Linker::Wild.link(self.name(), inputs, &config_incremental, cross_arch)?;
+        let duration_inc_modified = t3.elapsed();
+
+        let overhead_initial_pct = if duration_non_incremental.as_nanos() > 0 {
+            ((duration_inc_initial.as_nanos() as f64 - duration_non_incremental.as_nanos() as f64)
+                / duration_non_incremental.as_nanos() as f64)
+                * 100.0
+        } else {
+            0.0
+        };
+
+        let overhead_unchanged_pct = if duration_non_incremental.as_nanos() > 0 {
+            ((duration_inc_fastpath.as_nanos() as f64 - duration_non_incremental.as_nanos() as f64)
+                / duration_non_incremental.as_nanos() as f64)
+                * 100.0
+        } else {
+            0.0
+        };
+
+        let overhead_modified_pct = if duration_non_incremental.as_nanos() > 0 {
+            ((duration_inc_modified.as_nanos() as f64 - duration_non_incremental.as_nanos() as f64)
+                / duration_non_incremental.as_nanos() as f64)
+                * 100.0
+        } else {
+            0.0
+        };
+
+        println!(
+            "[Incremental State Tracking Overhead Matrix - {}]\n  ├─ 1. Baseline (Non-Incremental):         {:?}\n  ├─ 2. Incremental Initial (State save):    {:?} ({:+.2}% vs baseline)\n  ├─ 3. Incremental Unchanged (State check): {:?} ({:+.2}% vs baseline)\n  └─ 4. Incremental Relink (State update):   {:?} ({:+.2}% vs baseline)",
+            self.name(),
+            duration_non_incremental,
+            duration_inc_initial,
+            overhead_initial_pct,
+            duration_inc_fastpath,
+            overhead_unchanged_pct,
+            duration_inc_modified,
+            overhead_modified_pct,
+        );
 
         Ok(())
     }

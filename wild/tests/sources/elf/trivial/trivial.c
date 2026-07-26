@@ -3,6 +3,7 @@
 //#ExpectSym:exit_syscall section=".text"
 //#ReferenceLinkers:bfd,lld
 //#TestUpdateInPlace:true
+//#TestIncremental:true
 
 #include "../common/runtime.h"
 
